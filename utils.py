@@ -35,7 +35,7 @@ epc_client: Optional[EPCClient] = None
 
 # initialize logging, default to STDERR and INFO level
 logger = logging.getLogger("mind-wave")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 logger.addHandler(logging.StreamHandler())
 
 
@@ -65,7 +65,7 @@ def handle_arg_types(arg):
 def eval_in_emacs(method_name, *args):
     args = [sexpdata.Symbol(method_name)] + list(map(handle_arg_types, args))    # type: ignore
     sexp = sexpdata.dumps(args)
-
+    
     logger.debug("Eval in Emacs: %s", sexp)
     # Call eval-in-emacs elisp function.
     epc_client.call("eval-in-emacs", [sexp])    # type: ignore

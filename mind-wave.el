@@ -78,6 +78,7 @@
 (require 'subr-x)
 (require 'mind-wave-epc)
 (require 'markdown-mode)
+(require 'tabulated-list)
 
 (defgroup mind-wave nil
   "Mind-Wave group."
@@ -946,6 +947,80 @@ Your task is to summarize the text I give you in up to seven concise  bulletpoin
                 (insert model))
             (insert (format "# : %s\n\n" model)))))
     (message "Command mind-wave-change-model is only used for *.chat file.")))
+
+;; write a interactive function to list all the models
+;; first, write a function named mind-wave-list-models--response to receive the response which is a json string from python by `eval_in_emacs`
+;; then, interactive function named mind-wave-list-models need to call `mind-wave-call-async` with "list_models" as the argument
+;; to send the request to python.
+;; finally, we should get a temporary buffer with all the models listed using tabulate list mode to show the data
+;; the data structure is a list of models, each model is a dict with two keys: "name" and "description"
+(defun mind-wave-list-models ()
+  "列出所有可用的模型。"
+  (interactive)
+  (message "正在列出模型...")
+  (mind-wave-call-async "list_models"))
+;;;###autoload
+(define-derived-mode mind-wave-models-mode tabulated-list-mode "MindWave Models"
+  "Major mode for displaying MindWave models in a tabulated list."
+  ;; 定义表格的列格式
+  (setq tabulated-list-format [("ID" 20 t)
+                               ("Object" 30 t)
+                               ("Owned By" 30 t)])
+  ;; 设置列之间的间距
+  (setq tabulated-list-padding 2)
+  ;; 定义默认的排序键
+  (setq tabulated-list-sort-key (cons "ID" nil))
+  ;; 初始化表头
+  (tabulated-list-init-header))
+
+;; 处理从 Python 返回的模型列表
+(defun mind-wave-list-models--response (models-sexp)
+  "Process the models s-expression string MODELS-SEXP from Python.
+MODELS-SEXP is a string containing a list of models."
+  (let* ((parsed-data (condition-case err
+                          (if (stringp models-sexp)
+                              (with-temp-buffer
+                                (insert models-sexp)
+                                (goto-char (point-min))
+                                (read (current-buffer)))
+                            models-sexp)
+                        (error
+                         (message "解析s表达式时出错: %s" err)
+                         nil))))
+    ;; 检查解析后的数据是否是一个列表，并且每个元素也是一个列表（属性列表）
+    (if (and (listp parsed-data)
+             (cl-every #'listp parsed-data))
+        (let* ((models-data
+                (mapcar (lambda (model)
+                          (let ((id (plist-get model :id))
+                                (object (plist-get model :object))
+                                (owned-by (plist-get model :owned_by)))
+                            ;; 确保所有属性都存在
+                            (when (and id object owned-by)
+                              ;; 添加调试信息
+                              (message "Model ID: %s, Object: %s, Owned By: %s" id object owned-by)
+                              ;; 每个条目是一个列表，第一个元素是唯一ID，第二个元素是一个向量，包含列数据
+                              (list id
+                                    (vector id object owned-by)))))
+                        parsed-data)))
+          ;; 过滤掉可能的 nil 值
+          (setq models-data (delq nil models-data))
+          ;; 添加调试信息
+          (message "Models Data: %s" models-data)
+          ;; 显示缓冲区
+          (with-current-buffer (get-buffer-create "mind-wave-buffer-name")
+            (mind-wave-models-mode) ;; 激活自定义模式
+            (setq tabulated-list-entries models-data) ;; 设置条目
+            (tabulated-list-print t) ;; 打印条目
+            (read-only-mode 1) ;; 设置为只读模式
+            ;; 使用 `display-buffer-in-side-window` 从底部弹出缓冲区
+            (display-buffer-in-side-window
+             (current-buffer)
+             '((side . bottom)
+               (slot . 0)
+               (window-height . 0.3))))) ; 30% 的窗口高度
+      ;; 如果数据格式不正确，显示错误消息
+      (message "无效或意外的s表达式格式。")))
 
 (defun mind-wave--update-chat-buffer-to-new-version ()
   "Replace old markers in buffer with new ones."

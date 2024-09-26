@@ -28,6 +28,10 @@ from epc.server import ThreadingEPCServer
 from functools import wraps
 from utils import (get_command_result, get_emacs_var, get_emacs_vars, init_epc_client, eval_in_emacs, logger, close_epc_client, message_emacs, string_to_base64, decode_text)
 
+
+openai.base_url = 'https://opus.gptuu.com/v1/'
+
+
 def catch_exception(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -61,7 +65,8 @@ class MindWave:
         if api_key is not None:
             openai.api_key = api_key
 
-        openai.api_base, openai.api_type, openai.api_version = get_emacs_vars(["mind-wave-api-base", "mind-wave-api-type", "mind-wave-api-version"])
+        openai.api_base, openai.api_type, openai.api_version = \
+            get_emacs_vars(["mind-wave-api-base", "mind-wave-api-type", "mind-wave-api-version"])
 
         self.server.register_instance(self)  # register instance functions let elisp side call
 
@@ -111,15 +116,25 @@ class MindWave:
         return key
 
     @catch_exception
-    def send_completion_request(self, messages, model="gpt-3.5-turbo"):
+    def send_completion_request(self, messages, model="gpt-4o-mini"):
         if openai.api_type == 'azure':
-            response = openai.ChatCompletion.create(
-                engine = model,
-                messages = messages)
+            client = openai.OpenAI(
+                # This is the default and can be omitted
+                base_url=openai.api_base,
+                api_key=openai.api_key,
+            )
+            response = client.chat.completions.create(
+                messages=messages,
+                model=model)
         else:
-            response = openai.ChatCompletion.create(
-                model = model,
-                messages = messages)
+            client = openai.OpenAI(
+                # This is the default and can be omitted
+                base_url=openai.api_base,
+                api_key=openai.api_key,
+            )
+            response = client.chat.completions.create(
+                messages=messages,
+                model=model)
 
         result = ''
         for choice in response.choices:
@@ -128,15 +143,24 @@ class MindWave:
         return (result, response)
 
     @catch_exception
-    def send_stream_request(self, messages, callback, model="gpt-3.5-turbo"):
+    def send_stream_request(self, messages, callback, model="gpt-4o-mini"):
         if openai.api_type == 'azure':
-            response = openai.ChatCompletion.create(
+            client = openai.OpenAI(
+                # This is the default and can be omitted
+                api_key=openai.api_key,
+            )
+            response = client.chat.completions.create(
                 engine = model,
                 messages = messages,
                 temperature=0,
                 stream=True)
         else:
-            response = openai.ChatCompletion.create(
+            client = openai.OpenAI(
+                # This is the default and can be omitted
+                base_url=openai.api_base,
+                api_key=openai.api_key,
+            )
+            response = client.chat.completions.create(
                 model = model,
                 messages = messages,
                 temperature=0,
@@ -372,15 +396,39 @@ class MindWave:
                     self.send_stream_part_request(role, prompt, message_parts[1:], callback)
         except:
             message_emacs(traceback.format_exc())
+            
+    # write a function to list all the models
+    @threaded
+    def list_models(self):
+        cli = openai.OpenAI(
+            # This is the default and can be omitted
+            base_url='https://opus.gptuu.com/v1',
+            api_key='sk-TpDmv1qU3FstwqFZ0f434728Af774f9dAb297e654f2d1746',
+        )
+        
+        # keep model.id, model.object, model.owned_by
+        models = [{"id": model.id, "object": model.object, "owned_by": model.owned_by} 
+                       for model in cli.models.list()]
+
+        eval_in_emacs("mind-wave-list-models--response", models)
 
     def get_chunk_result(self, chunk):
-        delta = chunk.choices[0].delta
-        if not delta:
-            return ("end", "")
-        elif "role" in delta:
-            return ("start", "")
-        elif "content" in delta:
-            return ("content", string_to_base64(delta["content"]))
+        # Check if the choices is empty
+        if len(chunk.choices) != 0:
+            delta = chunk.choices[0].delta
+            if chunk.choices[0].finish_reason == "stop":
+                return ("end", "")
+
+            # Check if delta has the attribute 'role'
+            elif hasattr(delta, 'role') and delta.role is not None:
+                return ("start", "")
+        
+            # Check if delta has the attribute 'content'
+            elif hasattr(delta, 'content') and delta.content is not None:
+                return ("content", string_to_base64(delta.content))            
+
+        # Handle any other case not covered above
+        return ("end", "")
 
     def cleanup(self):
         """Do some cleanup before exit python process."""
